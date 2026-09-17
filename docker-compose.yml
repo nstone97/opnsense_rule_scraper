@@ -1,5 +1,6 @@
 services:
   opnsense-rule-scraper:
+    image: ghcr.io/nstone97/opnsense_rule_scraper:latest
     build: .
     container_name: opnsense-rule-scraper
     restart: unless-stopped

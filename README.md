@@ -106,7 +106,7 @@ python3 -m json.tool data/opnsense_rules.json | head
 
 You should see `rid,descr` and real rule names. HTTP 403 means the API user is missing **Diagnostics: Firewall** (or **All Pages** on some firmware). TLS errors with a stock OPNsense cert mean `OPNSENSE_TLS_VERIFY` is still `true`.
 
-Leave it running after that:
+Leave it running after that (builds from this source tree):
 
 ```bash
 docker compose up -d --build
@@ -134,6 +134,39 @@ docker compose run --rm -e RUN_ONCE=true opnsense-rule-scraper python -m opnsens
 | `HTTP_PORT` | `8080` | health + metrics |
 | `INCLUDE_INTERFACES` | `true` | also scrape device → LAN/WAN names |
 | `RUN_ONCE` | `false` | scrape once and exit |
+
+## Container image (GHCR)
+
+Every push to `main` (and every `v*` tag) runs GitHub Actions: pytest, then a Docker build that publishes to GitHub Container Registry. No extra secrets — the workflow uses `GITHUB_TOKEN`.
+
+| Tag | When |
+| --- | --- |
+| `ghcr.io/nstone97/opnsense_rule_scraper:latest` | each push to `main` |
+| `ghcr.io/nstone97/opnsense_rule_scraper:sha-<short>` | each push (immutable) |
+| `ghcr.io/nstone97/opnsense_rule_scraper:1.2.3` | git tag `v1.2.3` |
+
+The first run creates the package. If `docker pull` asks you to log in, the package is still private: **GitHub → Packages → opnsense_rule_scraper → Package settings → Change visibility → Public**. After that, production can pull with no token.
+
+## Run in production
+
+You only need this repo (or just `docker-compose.yml` + `.env`) and Docker. Do not build on the box:
+
+```bash
+git clone https://github.com/nstone97/opnsense_rule_scraper.git
+cd opnsense_rule_scraper
+cp .env.example .env
+# edit .env with the firewall URL and API key
+docker compose pull
+docker compose up -d
+```
+
+`pull` fetches `ghcr.io/nstone97/opnsense_rule_scraper:latest`. `up --build` is only for developing against local source.
+
+To pick up a new image later:
+
+```bash
+docker compose pull && docker compose up -d
+```
 
 ## Vector
 
