@@ -1,0 +1,103 @@
+# Drop-in example: syslog filterlog → enrich rid with rule name → Loki.
+# Requires Vector 0.49+ for --watch-enrichment-tables so CSV updates apply
+# without restarting Vector. Mount /data from the scraper container.
+
+data_dir: /var/lib/vector
+
+enrichment_tables:
+  opnsense_rules:
+    type: file
+    file:
+      path: /data/opnsense_rules.csv
+      encoding:
+        type: csv
+    schema:
+      rid: string
+      descr: string
+
+  opnsense_interfaces:
+    type: file
+    file:
+      path: /data/opnsense_interfaces.csv
+      encoding:
+        type: csv
+    schema:
+      device: string
+      name: string
+
+sources:
+  opnsense_syslog:
+    type: syslog
+    address: 0.0.0.0:514
+    mode: udp
+
+transforms:
+  parse_filterlog:
+    type: remap
+    inputs: [opnsense_syslog]
+    source: |
+      # filterlog CSV:
+      # rulenr,subrulenr,anchor,rid,interface,reason,action,dir,ipver,...
+      # Join on rid (field 4), NOT rulenr. rulenr is the pf @N index and
+      # changes whenever OPNsense rebuilds the ruleset.
+      if .appname != "filterlog" {
+        .filterlog = false
+      } else {
+        .filterlog = true
+        fields, err = parse_csv(.message)
+        if err == null && is_array(fields) && length(fields) >= 8 {
+          .fw_rulenr = fields[0]
+          .fw_subrulenr = fields[1]
+          .fw_anchor = fields[2]
+          .fw_rid = fields[3]
+          .fw_interface = fields[4]
+          .fw_reason = fields[5]
+          .fw_action = fields[6]
+          .fw_dir = fields[7]
+        }
+      }
+
+  enrich_filterlog:
+    type: remap
+    inputs: [parse_filterlog]
+    source: |
+      if .filterlog == true && exists(.fw_rid) && .fw_rid != "0" {
+        row, err = get_enrichment_table_record("opnsense_rules", {"rid": .fw_rid})
+        if err == null {
+          .fw_rule_name = row.descr
+        } else {
+          .fw_rule_name = .fw_rid
+        }
+      }
+
+      if exists(.fw_interface) {
+        iface, err = get_enrichment_table_record("opnsense_interfaces", {"device": .fw_interface})
+        if err == null {
+          .fw_interface_name = iface.name
+        }
+      }
+
+sinks:
+  loki:
+    type: loki
+    inputs: [enrich_filterlog]
+    endpoint: http://loki:3100
+    encoding:
+      codec: json
+    labels:
+      job: opnsense
+      appname: "{{ appname }}"
+      # Keep rule names out of Loki labels — high cardinality.
+      # They stay on the JSON payload as fw_rule_name.
+
+  # Optional: scraper metrics → VictoriaMetrics / Prometheus remote write
+  # vector_metrics:
+  #   type: prometheus_remote_write
+  #   inputs: [scraper_metrics]
+  #   endpoint: http://victoriametrics:8428/api/v1/write
+#
+# sources:
+#   scraper_metrics:
+#     type: prometheus_scrape
+#     endpoints: ["http://opnsense-rule-scraper:8080/metrics"]
+#     scrape_interval_secs: 30
